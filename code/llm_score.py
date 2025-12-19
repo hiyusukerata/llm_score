@@ -17,7 +17,6 @@ from google.auth.transport.requests import Request
 # ==========================
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 TOKEN_PICKLE_FILE = 'token.pickle'
-# 指定されたスプレッドシートID
 SPREADSHEET_ID = "12ub3XFQtIeBPU93dD3T4Nv4GaLT7TtnLoaFteEcYM4A"
 TARGET_SHEET = "xAI"
 
@@ -25,20 +24,19 @@ TARGET_SHEET = "xAI"
 # Google Sheets 認証
 # ==========================
 def get_credentials():
-    creds = None
-    if os.path.exists(TOKEN_PICKLE_FILE):
-        with open(TOKEN_PICKLE_FILE, 'rb') as f:
-            creds = pickle.load(f)
-    
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    if not os.path.exists(TOKEN_PICKLE_FILE):
+        raise Exception("❌ token.pickle が存在しません。")
+    with open(TOKEN_PICKLE_FILE, 'rb') as f:
+        creds = pickle.load(f)
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            raise Exception("❌ 有効な token.pickle が必要です。ローカルで生成してリポジトリに含めるかSecretとして管理してください。")
+            raise Exception("❌ OAuth トークンが無効です。")
     return creds
 
 # ==========================
-# Sheets 操作
+# Sheets 操作 (2行目から転記)
 # ==========================
 def write_to_sheet(data):
     try:
@@ -47,19 +45,23 @@ def write_to_sheet(data):
         sheet = service.spreadsheets()
         
         if data:
-            # 既存の内容をクリア（A1からデータがある想定）
-            sheet.values().clear(spreadsheetId=SPREADSHEET_ID, range=f"{TARGET_SHEET}!A1:Z1000").execute()
+            # 1行目(見出し)を残し、2行目以降をクリア
+            # A2:Z1000 の範囲をクリア
+            sheet.values().clear(
+                spreadsheetId=SPREADSHEET_ID, 
+                range=f"{TARGET_SHEET}!A2:Z1000"
+            ).execute()
             
-            # データ書き込み
+            # データ書き込み (A2セルから開始)
             sheet.values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{TARGET_SHEET}!A1",
+                range=f"{TARGET_SHEET}!A2",
                 valueInputOption="RAW",
                 body={"values": data}
             ).execute()
-            print(f"✅ {len(data)} 行（ヘッダー含む）を {TARGET_SHEET} シートに転記しました。")
+            print(f"✅ {len(data)} 行のデータを {TARGET_SHEET} シートの2行目から転記しました。")
         else:
-            print("⚠️ 転記するデータがありません。")
+            print("⚠️ 転記するデータが見つかりませんでした。")
     except Exception as e:
          print(f"⚠️ 書き込み処理中にエラーが発生しました: {e}")
 
@@ -72,71 +74,65 @@ def init_webdriver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
-    # GitHub Actions上のChromeパス設定（必要に応じて）
     service = webdriver.chrome.service.Service()
     return webdriver.Chrome(service=service, options=options)
 
 # ==========================
-# クロール処理
+# クロール処理 (ターゲットクラス指定)
 # ==========================
-def scrape_xai_table():
+def scrape_xai_models():
     url = "https://artificialanalysis.ai/providers/xai"
     driver = init_webdriver()
-    all_rows = []
+    rows_data = []
     
-    print(f"🔍 ページにアクセス中: {url}")
-
     try:
+        print(f"🔍 ページにアクセス中: {url}")
         driver.get(url)
-        # 指定されたクラスのコンテナが表示されるまで待機
         wait = WebDriverWait(driver, 20)
+        
+        # 特殊なクラス名を持つ要素（テーブル本体やそのコンテナ）をCSSセレクタで特定
+        # 特殊文字はエスケープが必要
+        target_selector = ".[\\&_tr\\:last-child\\]\\:border-0"
+        
         container = wait.until(
-            EC.presence_of_element_located((By.CLASS_NAME, "container.m-auto.pb-8"))
+            EC.presence_of_element_located((By.CSS_SELECTOR, target_selector))
         )
         
-        # コンテナ内のテーブルを探す
-        table = container.find_element(By.TAG_NAME, "table")
+        # その要素内にあるすべての行(tr)を取得
+        rows = container.find_elements(By.TAG_NAME, "tr")
         
-        # 1. ヘッダーの取得 (th)
-        headers = []
-        for th in table.find_elements(By.TAG_NAME, "th"):
-            headers.append(th.text.strip())
-        if headers:
-            all_rows.append(headers)
-
-        # 2. ボディ行の取得 (tr > td)
-        rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
         for row in rows:
+            # 各行のセル(td)を取得
             cells = row.find_elements(By.TAG_NAME, "td")
-            row_data = [cell.text.strip().replace('\n', ' ') for cell in cells]
-            if any(row_data): # 空行でなければ追加
-                all_rows.append(row_data)
+            if not cells:
+                continue # ヘッダー行(th)などの場合はスキップ
+                
+            # テキストを抽出してリスト化
+            row_content = [cell.text.strip().replace('\n', ' ') for cell in cells]
+            if any(row_content): # 空でない行のみ追加
+                rows_data.append(row_content)
                 
     except Exception as e:
         print(f"⚠️ スクレイピング中にエラーが発生しました: {e}")
     finally:
         driver.quit()
     
-    return all_rows
+    return rows_data
 
 # ==========================
 # メイン
 # ==========================
 if __name__ == "__main__":
-    table_data = []
     try:
-        # データの抽出
-        table_data = scrape_xai_table()
+        # 1. 指定されたクラスからデータを抽出
+        extracted_data = scrape_xai_models()
         
-        if table_data:
-            print(f"--- 抽出プレビュー (先頭3行) ---")
-            for row in table_data[:3]:
-                print(row)
-            
-            # シートへ書き込み
-            write_to_sheet(table_data)
+        # 2. 抽出結果の確認とスプレッドシートへの書き込み
+        if extracted_data:
+            print(f"📊 抽出成功: {len(extracted_data)} 件のモデル情報を取得しました。")
+            write_to_sheet(extracted_data)
         else:
-            print("❌ データが取得できませんでした。")
+            print("❌ 指定されたクラス内にデータが見つかりませんでした。")
             
     except Exception as e:
         print(f"致命的なエラーが発生しました: {e}")
