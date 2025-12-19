@@ -17,9 +17,9 @@ from google.auth.transport.requests import Request
 # ==========================
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 TOKEN_PICKLE_FILE = 'token.pickle'
-SPREADSHEET_ID = "1U_6H73SKZ7NXWHB7oXG2mdhh4kHe0zLXg9iSJ3jCjqY"
-STATUS_SHEET = "status_log"
-BACKUP_SHEET = "status_log_backup"
+SPREADSHEET_ID = "12ub3XFQtIeBPU93dD3T4Nv4GaLT7TtnLoaFteEcYM4A"
+STATUS_SHEET = "xAI"
+
 
 # ==========================
 # Google Sheets 認証 (省略)
@@ -40,27 +40,6 @@ def get_credentials():
 # ==========================
 # Sheets 操作 (省略)
 # ==========================
-def backup_sheet(sheet_name, backup_name):
-    # ... バックアップロジックは元のまま ...
-    try:
-        creds = get_credentials()
-        service = build('sheets', 'v4', credentials=creds)
-        sheet = service.spreadsheets()
-        result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=sheet_name).execute()
-        values = result.get("values", [])
-        if values:
-            sheet.values().clear(spreadsheetId=SPREADSHEET_ID, range=backup_name).execute()
-            sheet.values().update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=backup_name,
-                valueInputOption="RAW",
-                body={"values": values}
-            ).execute()
-            print(f"✅ {len(values)} 行を {backup_name} にバックアップしました。")
-        else:
-            print(f"⚠️ {sheet_name} にバックアップするデータがありません。")
-    except Exception as e:
-         print(f"⚠️ バックアップ処理中にエラーが発生しました: {e}")
 
 def write_to_sheet(data):
     # ... 書き込みロジックは元のまま ...
@@ -178,7 +157,6 @@ if __name__ == "__main__":
     rows = []
     try:
         # バックアップとスクレイピングを実行
-        backup_sheet(STATUS_SHEET, BACKUP_SHEET)
         rows = scrape_status(limit=5)
     except Exception as e:
         print(f"致命的なエラーが発生しました: {e}")
