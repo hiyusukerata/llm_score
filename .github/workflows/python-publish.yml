@@ -1,4 +1,4 @@
-name: Google_crawl
+name: llm_socre
 
 on:
   schedule:
