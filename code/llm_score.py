@@ -20,9 +20,6 @@ TOKEN_PICKLE_FILE = 'token.pickle'
 SPREADSHEET_ID = "12ub3XFQtIeBPU93dD3T4Nv4GaLT7TtnLoaFteEcYM4A"
 TARGET_SHEET = "xAI"
 
-# ==========================
-# Google Sheets 認証
-# ==========================
 def get_credentials():
     if not os.path.exists(TOKEN_PICKLE_FILE):
         raise Exception("❌ token.pickle が存在しません。")
@@ -35,9 +32,6 @@ def get_credentials():
             raise Exception("❌ OAuth トークンが無効です。")
     return creds
 
-# ==========================
-# Sheets 操作 (2行目から転記)
-# ==========================
 def write_to_sheet(data):
     try:
         creds = get_credentials()
@@ -45,40 +39,37 @@ def write_to_sheet(data):
         sheet = service.spreadsheets()
         
         if data:
-            # 1行目(見出し)を残し、2行目以降をクリア
-            # A2:Z1000 の範囲をクリア
+            # 2行目以降をクリア
             sheet.values().clear(
                 spreadsheetId=SPREADSHEET_ID, 
                 range=f"{TARGET_SHEET}!A2:Z1000"
             ).execute()
             
-            # データ書き込み (A2セルから開始)
+            # A2セルから書き込み
             sheet.values().update(
                 spreadsheetId=SPREADSHEET_ID,
                 range=f"{TARGET_SHEET}!A2",
                 valueInputOption="RAW",
                 body={"values": data}
             ).execute()
-            print(f"✅ {len(data)} 行のデータを {TARGET_SHEET} シートの2行目から転記しました。")
+            print(f"✅ {len(data)} 行を {TARGET_SHEET} シートに転記しました。")
         else:
-            print("⚠️ 転記するデータが見つかりませんでした。")
+            print("⚠️ 転記するデータがありません。")
     except Exception as e:
          print(f"⚠️ 書き込み処理中にエラーが発生しました: {e}")
 
-# ==========================
-# Selenium WebDriver 初期化
-# ==========================
 def init_webdriver():
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
-    service = webdriver.chrome.service.Service()
-    return webdriver.Chrome(service=service, options=options)
+    # GitHub Actionsでエラーが出やすい言語設定を固定
+    options.add_argument("--lang=ja-JP")
+    return webdriver.Chrome(options=options)
 
 # ==========================
-# クロール処理 (ターゲットクラス指定)
+# クロール処理 (修正版)
 # ==========================
 def scrape_xai_models():
     url = "https://artificialanalysis.ai/providers/xai"
@@ -90,26 +81,30 @@ def scrape_xai_models():
         driver.get(url)
         wait = WebDriverWait(driver, 20)
         
-        # 特殊なクラス名を持つ要素（テーブル本体やそのコンテナ）をCSSセレクタで特定
-        # 特殊文字はエスケープが必要
-        target_selector = ".[\\&_tr\\:last-child\\]\\:border-0"
-        
-        container = wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, target_selector))
+        # 1. 確実に存在する親コンテナを待機
+        # クラス名にスペースが含まれる場合は .class1.class2 の形式で指定
+        parent_container = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".container.m-auto.pb-8"))
         )
+        print("✅ 親コンテナを確認しました。")
+
+        # 2. 親コンテナの中にある tbody を取得
+        # クラス名 [&_tr:last-child]:border-0 は特殊文字を含むため CSS セレクタを使わず、
+        # 構造的に「container内の最初（または唯一）のtbody」を探すのが安全です
+        tbody = parent_container.find_element(By.TAG_NAME, "tbody")
         
-        # その要素内にあるすべての行(tr)を取得
-        rows = container.find_elements(By.TAG_NAME, "tr")
+        # 3. tbody 内のすべての行 (tr) を取得
+        rows = tbody.find_elements(By.TAG_NAME, "tr")
+        print(f"📊 {len(rows)} 個の行が見つかりました。解析を開始します。")
         
         for row in rows:
-            # 各行のセル(td)を取得
             cells = row.find_elements(By.TAG_NAME, "td")
             if not cells:
-                continue # ヘッダー行(th)などの場合はスキップ
+                continue
                 
-            # テキストを抽出してリスト化
+            # 文字列をクリーンアップしてリスト化
             row_content = [cell.text.strip().replace('\n', ' ') for cell in cells]
-            if any(row_content): # 空でない行のみ追加
+            if any(row_content):
                 rows_data.append(row_content)
                 
     except Exception as e:
@@ -119,20 +114,12 @@ def scrape_xai_models():
     
     return rows_data
 
-# ==========================
-# メイン
-# ==========================
 if __name__ == "__main__":
     try:
-        # 1. 指定されたクラスからデータを抽出
         extracted_data = scrape_xai_models()
-        
-        # 2. 抽出結果の確認とスプレッドシートへの書き込み
         if extracted_data:
-            print(f"📊 抽出成功: {len(extracted_data)} 件のモデル情報を取得しました。")
             write_to_sheet(extracted_data)
         else:
-            print("❌ 指定されたクラス内にデータが見つかりませんでした。")
-            
+            print("❌ データが取得できませんでした。サイトの構造が変更されたか、レンダリングが間に合っていない可能性があります。")
     except Exception as e:
         print(f"致命的なエラーが発生しました: {e}")
